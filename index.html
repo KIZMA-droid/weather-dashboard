@@ -108,6 +108,7 @@ body.loading .ringbtn .glyph{animation:spin .8s linear infinite}
 /* ---------- Board + panels ---------- */
 .board-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 2px 12px;color:var(--dim);font-size:11px}
 .board-bar button{flex:none;border:1px solid var(--line);border-radius:8px;background:transparent;padding:6px 10px;color:var(--muted);transition:.2s}
+body.layout-locked .panel-tools,body.layout-locked #resetLayout{display:none}
 /* World clocks */
 .clocks{flex:1;min-width:0;display:flex;gap:8px;overflow-x:auto;scrollbar-width:none}
 .clocks::-webkit-scrollbar{display:none}
@@ -506,7 +507,8 @@ body.fresh .range i{animation:growx .8s var(--ease) both;animation-delay:calc(.1
   <div class="alerts" id="parAlerts" role="alert"></div>
   <div class="board-bar">
     <div class="clocks" id="clocks" aria-label="World clocks"></div>
-    <button id="resetLayout" type="button" title="Hover a panel to move it: drag the grip or use the arrows. This restores the default order.">Reset layout</button>
+    <button id="resetLayout" type="button" title="Restore the default panel order">Reset layout</button>
+    <button id="lockLayout" type="button" aria-pressed="true" title="While locked, panels cannot be moved. Unlock to rearrange them with the arrows or by dragging the grip.">🔒 Layout locked</button>
   </div>
 
   <main class="board" id="dashboardBoard" aria-label="Reorderable weather dashboard panels">
@@ -1360,7 +1362,21 @@ function locate(showStatus = false){
   }, () => load(), {timeout: 9000});
 }
 function setupPanelLayout(){
-  const board = $('dashboardBoard'), KEY = 'weatherDashboardPanelOrder.v2';
+  const board = $('dashboardBoard'), KEY = 'weatherDashboardPanelOrder.v2', LOCK_KEY = 'weatherDashboardLayoutLocked';
+  // The built-in panel order. Every device and address starts from this, so it is the same everywhere
+  // until someone unlocks the layout and rearranges it on that device.
+  const DEFAULT_ORDER = ['current-weather', 'air-quality', 'haze-watch', 'live-day', 'cyclones', 'ph-impact', 'weather-details', 'seven-day', 'google-ai'];
+  DEFAULT_ORDER.forEach(key => { const p = board.querySelector(`[data-panel="${key}"]`); if (p) board.append(p); });
+  // Locked by default so panels are not moved by accident, especially on touch screens.
+  let locked = true;
+  try { locked = localStorage.getItem(LOCK_KEY) !== '0'; } catch {}
+  const paintLock = () => {
+    document.body.classList.toggle('layout-locked', locked);
+    set('lockLayout', locked ? '🔒 Layout locked' : '🔓 Lock layout');
+    $('lockLayout').setAttribute('aria-pressed', locked);
+  };
+  $('lockLayout').onclick = () => { locked = !locked; try { localStorage.setItem(LOCK_KEY, locked ? '1' : '0'); } catch {} paintLock(); };
+  paintLock();
   [...board.children].forEach((panel, i) => {
     panel.dataset.defaultOrder = i;
     panel.style.setProperty('--i', i);
