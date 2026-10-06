@@ -8,6 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Atmos">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" type="image/png" href="icon.png">
 <title>Atmos — Weather dashboard</title>
@@ -284,6 +285,22 @@ body.booting :is(.temp,.metric-val,.aqi-num,.haze-score) *{visibility:hidden}
 .scale div.on{color:var(--soft);border-left-color:#fff}
 .scale div.on b{color:#fff}
 .scale-note{margin-bottom:12px}
+
+/* Official NEA regional readings inside Haze watch (Singapore only) */
+.nea{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.nea[hidden]{display:none}
+.nea-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.nea-head b{font:700 13px var(--head)}
+.nea-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;margin-bottom:10px}
+.nea-r{padding:10px 11px;animation:rise .4s var(--ease) both;animation-delay:calc(var(--n)*40ms)}
+.nea-r.near{border-color:var(--cyan);box-shadow:inset 0 0 0 1px #6fd3e340}
+.nea-r h3{margin:0 0 6px;display:flex;justify-content:space-between;align-items:center;gap:6px;font:700 11px var(--head);letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.nea-r h3 i{font-style:normal;font-size:9px;letter-spacing:.04em;color:var(--cyan)}
+.nea-r b{display:block;font:700 22px var(--head);letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.nea-r b small{font:600 10px var(--body);letter-spacing:0;margin-left:5px}
+.nea-r p{margin:5px 0 0;font-size:10px;color:var(--muted);white-space:nowrap}
+.nea-r p em{font-style:normal;font-weight:700}
+.b0{color:var(--green)}.b1{color:var(--gold)}.b2{color:var(--orange)}.b3{color:var(--red)}.b4{color:#d58cf0}
 
 /* Air quality / haze panels blink light red while their reading is worse than the good band */
 .panel.warn-blink{border-color:#ff858766;animation:warnblink 1.6s ease-in-out infinite}
@@ -647,6 +664,11 @@ body.fresh .range i{animation:growx .8s var(--ease) both;animation-delay:calc(.1
       </div>
       <div class="fine scale-note">Low is below 25. This panel blinks red at 25 or higher.</div>
       <div class="note" id="hazeNote">Combining visibility, humidity and particulate readings where available. This is an indicator, not an official haze observation.</div>
+      <div class="nea" id="neaBlock" hidden>
+        <div class="nea-head"><b>Official NEA readings · Singapore</b><span class="note" id="neaMeta">Connecting…</span></div>
+        <div class="nea-grid" id="neaGrid"></div>
+        <div class="fine">National Environment Agency readings via data.gov.sg, published hourly and checked every 10 minutes. 24-hour PSI: Good 0–50, Moderate 51–100, Unhealthy 101–200, Very unhealthy 201–300, Hazardous above 300. 1-hour PM2.5: Normal up to 55, Elevated 56–150, High 151–250, Very high above 250 µg/m³. NEA advises using the 1-hour PM2.5 for what you do now and the PSI for planning the day. This panel also blinks when your region’s PSI is above 100 or its PM2.5 is above 55. <a href="https://www.haze.gov.sg/" target="_blank" rel="noopener noreferrer">haze.gov.sg</a> · <a href="https://www.checkpointsg.com/haze" target="_blank" rel="noopener noreferrer">Checkpoint SG haze page</a></div>
+      </div>
     </section>
 
 
@@ -752,7 +774,7 @@ async function load(forceAi = false){
     render();
     set('status', '');
   } catch (e) {
-    set('status', e.message || 'Unable to load weather data.');
+    set('status', navigator.onLine === false ? 'You are offline. Live weather will return when the connection does.' : e.message || 'Unable to load weather data.');
     $('status').className = 'status error';
   } finally {
     document.body.classList.remove('loading');
@@ -907,8 +929,48 @@ function renderHaze(c, a){
   $('hazeBadge').className = 'badge' + (score >= 55 ? ' alert' : score >= 25 ? ' watch' : '');
   $('hazeMarker').style.left = score + '%';
   [...$('hazeScale').children].forEach((el, n) => el.classList.toggle('on', n === (score < 25 ? 0 : score < 55 ? 1 : 2)));
-  document.querySelector('[data-panel="haze-watch"]').classList.toggle('warn-blink', score >= 25);
+  hazeWarn.indicator = score >= 25;
+  paintHazeWarn();
+  syncNea();
   set('hazeNote', `${signals.length ? 'Contributing signals: ' + signals.join(' · ') + '.' : 'No strong haze signals in current readings.'} This indicator uses visibility, humidity and particulate matter; it is not an official haze observation.`);
+}
+// Haze watch blinks when either the indicator or (in Singapore) the official reading for the user's region is raised.
+const hazeWarn = {indicator: false, official: false};
+function paintHazeWarn(){document.querySelector('[data-panel="haze-watch"]').classList.toggle('warn-blink', hazeWarn.indicator || hazeWarn.official)}
+// Official NEA readings for Singapore's five regions, from data.gov.sg (open, no key).
+const NEA = {psi: null, pm25: null, regions: [], stamp: '', fetchedAt: 0, busy: false, error: false};
+const inSingapore = () => place.lat > 1.13 && place.lat < 1.48 && place.lon > 103.59 && place.lon < 104.1;
+function syncNea(){
+  const on = inSingapore();
+  $('neaBlock').hidden = !on;
+  if (!on) { hazeWarn.official = false; return paintHazeWarn(); }
+  if (!NEA.busy && Date.now() - NEA.fetchedAt > 600000) loadNea();
+  renderNea();
+}
+async function loadNea(){
+  NEA.busy = true; NEA.fetchedAt = Date.now();
+  const get = kind => fetch('https://api-open.data.gov.sg/v2/real-time/api/' + kind).then(r => r.ok ? r.json() : null).then(d => d?.data?.items?.length ? d.data : null).catch(() => null);
+  const [psi, pm] = await Promise.all([get('psi'), get('pm25')]);
+  NEA.busy = false;
+  NEA.error = !psi && !pm;
+  if (psi) { NEA.psi = psi.items[0].readings.psi_twenty_four_hourly; NEA.regions = psi.regionMetadata; NEA.stamp = psi.items[0].timestamp; }
+  if (pm) { NEA.pm25 = pm.items[0].readings.pm25_one_hourly; if (!psi) { NEA.regions = pm.regionMetadata; NEA.stamp = pm.items[0].timestamp; } }
+  renderNea();
+}
+function renderNea(){
+  if (!inSingapore()) return;
+  if (!NEA.psi && !NEA.pm25) { set('neaMeta', NEA.error ? 'NEA feed unavailable · retrying' : 'Connecting…'); $('neaGrid').innerHTML = ''; return; }
+  const psiBand = v => v <= 50 ? [0, 'Good'] : v <= 100 ? [1, 'Moderate'] : v <= 200 ? [2, 'Unhealthy'] : v <= 300 ? [3, 'Very unhealthy'] : [4, 'Hazardous'];
+  const pmBand = v => v <= 55 ? [0, 'Normal'] : v <= 150 ? [1, 'Elevated'] : v <= 250 ? [3, 'High'] : [4, 'Very high'];
+  const near = [...NEA.regions].sort((a, b) => kmBetween(place.lat, place.lon, a.labelLocation.latitude, a.labelLocation.longitude) - kmBetween(place.lat, place.lon, b.labelLocation.latitude, b.labelLocation.longitude))[0]?.name;
+  $('neaGrid').innerHTML = ['north', 'west', 'central', 'east', 'south'].map((name, n) => {
+    const psi = NEA.psi?.[name], pm = NEA.pm25?.[name], pb = Number.isFinite(psi) ? psiBand(psi) : null, mb = Number.isFinite(pm) ? pmBand(pm) : null;
+    return `<div class="tile nea-r${name === near ? ' near' : ''}" style="--n:${n}"><h3>${name}${name === near ? '<i>NEAREST</i>' : ''}</h3><b class="${pb ? 'b' + pb[0] : ''}">${pb ? psi : '—'}<small>${pb ? pb[1] : ''}</small></b><p>24-h PSI</p><p>1-h PM2.5 <em class="${mb ? 'b' + mb[0] : ''}">${mb ? pm + ' µg/m³' : '—'}</em></p><p><em class="${mb ? 'b' + mb[0] : ''}">${mb ? mb[1] : ''}</em></p></div>`;
+  }).join('');
+  const at = NEA.stamp ? new Date(NEA.stamp).toLocaleString([], {timeZone: 'Asia/Singapore', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit'}) + ' SGT' : '—';
+  set('neaMeta', `Readings of ${at}${NEA.error ? ' · last update failed' : ''}`);
+  hazeWarn.official = NEA.psi?.[near] > 100 || NEA.pm25?.[near] > 55;
+  paintHazeWarn();
 }
 function renderGoogleAi(){
   if (!googleAi?.hourly) { set('aiStatus', 'Model feed unavailable'); $('aiChart').innerHTML = '<text x="24" y="90">WeatherNext data could not be loaded right now.</text>'; return; }
@@ -1473,6 +1535,10 @@ function setupClocks(){
   // Align ticks to the wall-clock second so every clock flips together.
   setTimeout(() => { tick(); setInterval(tick, 1000); }, 1000 - Date.now() % 1000);
 }
+
+// Installable app: the service worker needs a web address, so it is skipped when the file is opened from disk.
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+window.addEventListener('online', () => load());
 
 setupPanelLayout();
 setupClocks();
