@@ -684,9 +684,10 @@ body.fresh .range i{animation:growx .8s var(--ease) both;animation-delay:calc(.1
         <p class="fine">Philippine AI4RP and Atmo forecasts are locally developed with PAGASA/DOST partners; Weathernews and Google have also announced a PAGASA collaboration. Those project announcements do not expose a public live forecast feed for this page, so use the official PAGASA bulletin link in the cyclone monitor for local warnings. <a href="https://asti.dost.gov.ph/asticon-2026-exhibitors/" target="_blank" rel="noopener noreferrer">DOST-ASTI AI4RP</a> · <a href="https://global.weathernews.com/news/18605/" target="_blank" rel="noopener noreferrer">Weathernews + Google</a></p>
       </details>
     </section>
-  </main>
 
-  <div class="footer">Forecast and air quality by Open-Meteo · Cyclone data by GDACS · Weather refreshes every 30 seconds, storms every 10 minutes</div>
+    </main>
+
+  <div class="footer">Forecast and air quality by Open-Meteo · Cyclone data by GDACS · Weather refreshes every 30 seconds, storms every 10 minutes · Build 2026-10-07.1</div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
@@ -1269,8 +1270,9 @@ async function loadPh(){
 }
 // Live PAGASA river and dam gauges (Pasig-Marikina-Tullahan basin). PAGASA's feed has no cross-site access,
 // so it is only reachable through the local helper (serve.ps1), which relays it at /ffws.
-// When the page is hosted online instead, set FFWS_RELAY to the address of a relay that returns the same JSON with CORS enabled.
-const FFWS_RELAY = '';
+// Away from the local helper, the levels come from ffws.json on this repository's "data" branch, which the
+// GitHub Action in .github/workflows/water-levels.yml refreshes from PAGASA every 15 minutes.
+const FFWS_RELAY = 'https://raw.githubusercontent.com/KIZMA-droid/weather-dashboard/data/ffws.json';
 const WL_LOCAL = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
 const WL = {data: null, fetchedAt: 0, busy: false, error: false, url: WL_LOCAL ? '/ffws' : FFWS_RELAY, viaHelper: WL_LOCAL || !!FFWS_RELAY};
 async function loadWl(){
@@ -1309,7 +1311,10 @@ function renderWl(){
     return {name: s.obsnm, wl, alert, alarm, crit, hasThr, sev, diff: wl - num(s.wl1h), closeness: hasThr ? (wl - alert) / (crit - alert) : -Infinity, time: s.timestr};
   }).sort((a, b) => b.sev - a.sev || b.closeness - a.closeness);
   const count = n => stations.filter(s => s.sev === n).length, flagged = [[4, 'critical'], [3, 'alarm'], [2, 'alert']].filter(([n]) => count(n)).map(([n, t]) => `${count(n)} ${t}`).join(', ');
-  set('wlMeta', `${stations.length} stations · ${flagged || 'all below alert level'} · observed ${String(stations[0]?.time || '').slice(11) || '—'} PHT · PAGASA${WL.error ? ' · last update failed' : ''}`);
+  // The relayed copy can fall behind if its updater stops, so say how old the readings are once they pass 90 minutes.
+  const observed = Date.parse(String(stations[0]?.time || '').replace(' ', 'T') + ':00+08:00'), ageMin = (Date.now() - observed) / 60000;
+  const stale = ageMin > 90 ? ` · ⚠ readings are ${ageMin < 2880 ? Math.round(ageMin / 60) + ' hours' : Math.round(ageMin / 1440) + ' days'} old` : '';
+  set('wlMeta', `${stations.length} stations · ${flagged || 'all below alert level'} · observed ${String(stations[0]?.time || '').slice(11) || '—'} PHT · PAGASA${stale}${WL.error ? ' · last update failed' : ''}`);
   grid.innerHTML = stations.map((s, n) => {
     const label = ['NO THRESHOLDS', 'NORMAL', 'ALERT', 'ALARM', 'CRITICAL'][s.sev], cls = ['s0', '', 's1', 's2', 's3'][s.sev];
     // Track runs from two threshold-spans below the alert level to one above critical, so alert sits at 50% and critical at 75%.
