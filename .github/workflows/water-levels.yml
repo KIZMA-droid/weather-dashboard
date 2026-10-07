@@ -1,0 +1,40 @@
+# Fetches PAGASA's live river and dam levels every 15 minutes and publishes them as ffws.json on a
+# separate "data" branch, where the dashboard can read them. PAGASA's own feed cannot be read directly
+# by a web page, so this job acts as the relay for the online copy of the dashboard.
+#
+# The data branch is overwritten each run (a single commit), so it never bloats the repository.
+name: Update PAGASA water levels
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: water-levels
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch PAGASA flood forecasting stations
+        run: |
+          curl --fail --silent --show-error --max-time 60 --retry 2 \
+            -A "atmos-dashboard (github.com/${{ github.repository }})" \
+            "https://pasig-marikina-tullahanffws.pagasa.dost.gov.ph/water/main_list.do" -o ffws.json
+          # Refuse to publish anything that is not a non-empty list of stations.
+          python3 -c "import json; d = json.load(open('ffws.json')); assert isinstance(d, list) and d and 'obsnm' in d[0], 'unexpected response'; print(len(d), 'stations')"
+
+      - name: Publish to the data branch
+        run: |
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ffws.json
+          git commit -q -m "PAGASA water levels $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data
