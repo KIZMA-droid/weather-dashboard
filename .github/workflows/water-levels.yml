@@ -22,9 +22,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Complete PAGASA's certificate chain
+        # PAGASA's server sends only its own certificate and leaves out the intermediate one that links it to
+        # a trusted root. Windows fetches the missing piece by itself; Linux does not, so curl fails with
+        # exit code 60. Fetch the intermediate from the address named inside PAGASA's certificate, and use
+        # it only after confirming it chains to a root this machine already trusts.
+        run: |
+          set -euo pipefail
+          host=pasig-marikina-tullahanffws.pagasa.dost.gov.ph
+          openssl s_client -connect "$host:443" -servername "$host" </dev/null 2>/dev/null | openssl x509 -out site.pem
+          issuer_url=$(openssl x509 -in site.pem -noout -ext authorityInfoAccess | grep 'CA Issuers' | grep -o 'http[^[:space:]]*' | head -n 1)
+          echo "Intermediate certificate: $issuer_url"
+          curl --fail --silent --show-error --max-time 30 "$issuer_url" -o issuer.bin
+          openssl x509 -inform DER -in issuer.bin -out issuer.pem 2>/dev/null || openssl x509 -in issuer.bin -out issuer.pem
+          openssl verify -CAfile /etc/ssl/certs/ca-certificates.crt issuer.pem
+          cat /etc/ssl/certs/ca-certificates.crt issuer.pem > trusted.pem
+
       - name: Fetch PAGASA flood forecasting stations
         run: |
-          curl --fail --silent --show-error --max-time 60 --retry 2 \
+          curl --fail --silent --show-error --max-time 60 --retry 2 --cacert trusted.pem \
             -A "atmos-dashboard (github.com/${{ github.repository }})" \
             "https://pasig-marikina-tullahanffws.pagasa.dost.gov.ph/water/main_list.do" -o ffws.json
           # Refuse to publish anything that is not a non-empty list of stations.
@@ -32,6 +48,7 @@ jobs:
 
       - name: Publish to the data branch
         run: |
+          rm -f site.pem issuer.bin issuer.pem trusted.pem
           git init -q -b data
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
